@@ -1,0 +1,286 @@
+#define BLYNK_TEMPLATE_ID "TMPL36CH80bRr"
+#define BLYNK_TEMPLATE_NAME "IOT CARS"
+#define BLYNK_AUTH_TOKEN "rgpuOqPm29avv45MmxEKG3A9Z6VQI6M7"
+#include <ESP8266WiFi.h>
+#include <BlynkSimpleEsp8266.h>
+#include <TM1637Display.h>
+
+// -------- WIFI DETAILS --------
+char ssid[] = "2.5G-MAGGAM";
+char pass[] = "9010357222";
+
+
+
+
+#define BLYNK_PRINT Serial
+
+#include <ESP8266WiFi.h>
+#include <BlynkSimpleEsp8266.h>
+#include <TM1637Display.h>
+
+
+
+
+
+// -------- TM1637 DISPLAY --------
+#define CLK D1
+#define DIO D2
+
+TM1637Display display(CLK, DIO);
+
+// -------- TRAFFIC LIGHT --------
+#define GREEN_LED D3
+#define YELLOW_LED D4
+#define RED_LED D0
+
+// -------- BUZZER --------
+// Same D0 as RED LED, as requested.
+
+// -------- IR SENSORS --------
+#define IR1 D5
+#define IR2 D6
+
+// -------- ULTRASONIC SENSOR 1 --------
+#define TRIG1 D7
+#define ECHO1 D8
+
+// -------- ULTRASONIC SENSOR 2 --------
+#define TRIG2 3
+#define ECHO2 1
+
+// -------- DISTANCE SETTINGS --------
+#define WARNING_DISTANCE 150
+#define DANGER_DISTANCE 80
+
+// -------- VARIABLES --------
+float distance1 = 400;
+float distance2 = 400;
+float nearestDistance = 400;
+
+bool vehicle1 = false;
+bool vehicle2 = false;
+
+bool danger = false;
+bool warning = false;
+
+unsigned long lastUpdate = 0;
+
+
+// -------- ULTRASONIC FUNCTION --------
+float getDistance(int trigPin, int echoPin) {
+
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(3);
+
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  long duration = pulseIn(echoPin, HIGH, 25000);
+
+  if (duration == 0) {
+    return 400;
+  }
+
+  return duration * 0.0343 / 2.0;
+}
+
+// -------- SAFE SIGNAL --------
+void safeSignal() {
+
+  digitalWrite(GREEN_LED, HIGH);
+  digitalWrite(YELLOW_LED, LOW);
+  digitalWrite(RED_LED, LOW);
+}
+
+// -------- WARNING SIGNAL --------
+void warningSignal() {
+
+  digitalWrite(GREEN_LED, LOW);
+  digitalWrite(YELLOW_LED, HIGH);
+  digitalWrite(RED_LED, LOW);
+}
+
+// -------- DANGER SIGNAL --------
+void dangerSignal() {
+
+  digitalWrite(GREEN_LED, LOW);
+  digitalWrite(YELLOW_LED, LOW);
+
+  // Red LED and buzzer share D0
+  digitalWrite(RED_LED, HIGH);
+}
+
+// -------- DISPLAY DISTANCE --------
+void showDistance() {
+
+  int displayDistance = (int)nearestDistance;
+
+  if (displayDistance > 9999) {
+    displayDistance = 9999;
+  }
+
+  display.showNumberDec(displayDistance, false);
+}
+
+// -------- BLYNK UPDATE --------
+void sendBlynkData() {
+
+  Blynk.virtualWrite(V0, vehicle1 ? 1 : 0);
+  Blynk.virtualWrite(V1, vehicle2 ? 1 : 0);
+
+  Blynk.virtualWrite(V2, distance1);
+  Blynk.virtualWrite(V3, distance2);
+
+  // Nearest distance for Blynk Gauge
+  Blynk.virtualWrite(V5, nearestDistance);
+
+  Blynk.virtualWrite(V6, danger ? 1 : 0);
+
+  if (danger) {
+    Blynk.virtualWrite(V4, "DANGER");
+  }
+  else if (warning) {
+    Blynk.virtualWrite(V4, "WARNING");
+  }
+  else {
+    Blynk.virtualWrite(V4, "SAFE");
+  }
+}
+
+// -------- SETUP --------
+void setup() {
+
+  Serial.begin(115200);
+
+  pinMode(GREEN_LED, OUTPUT);
+  pinMode(YELLOW_LED, OUTPUT);
+  pinMode(RED_LED, OUTPUT);
+
+  pinMode(IR1, INPUT);
+  pinMode(IR2, INPUT);
+
+  pinMode(TRIG1, OUTPUT);
+  pinMode(ECHO1, INPUT);
+
+  pinMode(TRIG2, OUTPUT);
+  pinMode(ECHO2, INPUT);
+
+  digitalWrite(TRIG1, LOW);
+  digitalWrite(TRIG2, LOW);
+
+  display.setBrightness(7);
+  display.clear();
+
+  safeSignal();
+
+  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+}
+
+// -------- MAIN LOOP --------
+void loop() {
+
+  Blynk.run();
+
+  // -------- READ IR SENSORS --------
+  // LOW = Vehicle detected
+
+  vehicle1 = (digitalRead(IR1) == LOW);
+  vehicle2 = (digitalRead(IR2) == LOW);
+
+  // -------- READ ULTRASONIC SENSORS --------
+
+  distance1 = getDistance(TRIG1, ECHO1);
+
+  delay(40);
+
+  distance2 = getDistance(TRIG2, ECHO2);
+
+  // -------- NEAREST DISTANCE --------
+
+  nearestDistance = min(distance1, distance2);
+
+  // -------- DANGER CONDITION --------
+
+  danger =
+    vehicle1 &&
+    vehicle2 &&
+    distance1 <= DANGER_DISTANCE &&
+    distance2 <= DANGER_DISTANCE;
+
+  // -------- WARNING CONDITION --------
+
+  warning =
+    !danger &&
+    (
+      vehicle1 ||
+      vehicle2 ||
+      distance1 <= WARNING_DISTANCE ||
+      distance2 <= WARNING_DISTANCE
+    );
+
+  // -------- TRAFFIC CONTROL --------
+
+  if (danger) {
+
+    dangerSignal();
+
+  }
+
+  else if (warning) {
+
+    warningSignal();
+
+  }
+
+  else {
+
+    safeSignal();
+
+  }
+
+  // -------- DISPLAY NEAREST DISTANCE --------
+
+  showDistance();
+
+  // -------- SEND DATA TO BLYNK --------
+
+  if (millis() - lastUpdate >= 500) {
+
+    lastUpdate = millis();
+
+    sendBlynkData();
+
+    Serial.println("-----------------------");
+
+    Serial.print("Vehicle 1: ");
+    Serial.println(vehicle1);
+
+    Serial.print("Vehicle 2: ");
+    Serial.println(vehicle2);
+
+    Serial.print("Distance 1: ");
+    Serial.print(distance1);
+    Serial.println(" cm");
+
+    Serial.print("Distance 2: ");
+    Serial.print(distance2);
+    Serial.println(" cm");
+
+    Serial.print("Nearest Distance: ");
+    Serial.print(nearestDistance);
+    Serial.println(" cm");
+
+    Serial.print("Traffic Status: ");
+
+    if (danger) {
+      Serial.println("DANGER");
+    }
+    else if (warning) {
+      Serial.println("WARNING");
+    }
+    else {
+      Serial.println("SAFE");
+    }
+  }
+}
